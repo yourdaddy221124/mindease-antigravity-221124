@@ -1,7 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader, Mic, MicOff, Volume2, VolumeX, ChevronDown } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import { useAuth } from '../context/AuthContext';
 import './ChatArea.css';
 
 const CHARACTERS = [
@@ -62,7 +60,8 @@ const CHARACTERS = [
 ];
 
 function ChatArea({ mood, chatMode, character, onCharacterChange }) {
-    const { user } = useAuth();
+    // We use a mock user ID for frontend-only persistence
+    const MOCK_USER_ID = 'mock-user-id';
     const [messages, setMessages] = useState([]);
 
     const currentChar = chatMode === 'character'
@@ -80,89 +79,93 @@ function ChatArea({ mood, chatMode, character, onCharacterChange }) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
 
-    // Supabase generic fetch and realtime subscribe
+    const storageKey = `chat_messages_${MOCK_USER_ID}_${chatMode}_${character || 'default'}`;
+
+    // Text-to-speech helper (Female Voice)
+    const speak = (text) => {
+        if (!isTtsEnabled || !window.speechSynthesis) return;
+        window.speechSynthesis.cancel();
+
+        // Remove emojis using a regular expression before speaking
+        const textWithoutEmojis = text.replace(/[\u1000-\uFFFF]+/g, '').trim();
+
+        const utter = new SpeechSynthesisUtterance(textWithoutEmojis);
+        utter.rate = 0.95;
+
+        // Try to find a female voice
+        const setFemaleVoice = () => {
+            const voices = window.speechSynthesis.getVoices();
+            const femaleVoice = voices.find(v =>
+                v.name.toLowerCase().includes('female') ||
+                v.name.toLowerCase().includes('woman') ||
+                v.name.toLowerCase().includes('zira') || // Microsoft Zira (Windows)
+                v.name.toLowerCase().includes('samantha') || // macOS
+                v.name.toLowerCase().includes('victoria') ||
+                v.name.toLowerCase().includes('google us english')
+            );
+            if (femaleVoice) {
+                utter.voice = femaleVoice;
+            }
+            window.speechSynthesis.speak(utter);
+        };
+
+        if (window.speechSynthesis.getVoices().length === 0) {
+            window.speechSynthesis.addEventListener('voiceschanged', setFemaleVoice, { once: true });
+        } else {
+            setFemaleVoice();
+        }
+    };
+
+    // Load messages and send/speak greeting
     useEffect(() => {
-        if (!user) {
-            setMessages([]);
-            return;
+        const savedMessages = localStorage.getItem(storageKey);
+        const parsedMessages = savedMessages ? JSON.parse(savedMessages) : [];
+        setMessages(parsedMessages);
+
+        let greetingText = "";
+        let speechText = "";
+
+        if (chatMode === 'character' && currentChar) {
+            greetingText = currentChar.greeting;
+            speechText = parsedMessages.length > 0 ? "Welcome back." : greetingText;
+        } else if (chatMode === 'genz') {
+            greetingText = "Hey bestie! ✨ I'm Mind Ease, your AI therapist but like, the chill version. No cap, I'm here for all the tea and the vibes. How's your mental health faring today? Sending good energy! 💖💅";
+            speechText = parsedMessages.length > 0 ? "Welcome back bestie!" : greetingText;
+        } else {
+            greetingText = "Hello there. I'm Mind Ease, your AI mental health companion. I'm here to listen and support you in a safe, non-judgmental space. How are you feeling today?";
+            speechText = parsedMessages.length > 0 ? "Welcome back to Mind Ease." : greetingText;
         }
 
-        const fetchMessages = async () => {
-            const { data, error } = await supabase
-                .from('messages')
-                .select('*')
-                .eq('user_id', user.id)
-                .order('created_at', { ascending: true });
-
-            if (!error && data) {
-                setMessages(data);
-            }
-        };
-
-        fetchMessages();
-
-        const subscription = supabase
-            .channel(`user_messages_${user.id}`) // Unique channel per user
-            .on('postgres_changes', {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'messages',
-                filter: `user_id=eq.${user.id}`
-            }, payload => {
-                // Prevent duplicate messages if state already updated
-                setMessages(prev => {
-                    if (prev.find(m => m.id === payload.new.id)) return prev;
-                    return [...prev, payload.new];
-                });
-            })
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(subscription);
-        };
-    }, [user?.id]);
-
-    // Trigger initial greeting if chat is empty
-    useEffect(() => {
-        if (!user || messages.length > 0 || isTyping) return;
-
-        const sendGreeting = async () => {
-            let greetingText = "";
-
-            if (chatMode === 'character' && currentChar) {
-                greetingText = currentChar.greeting;
-            } else if (chatMode === 'genz') {
-                greetingText = "Hey bestie! ✨ I'm Mind Ease, your AI therapist but like, the chill version. No cap, I'm here for all the tea and the vibes. How's your mental health faring today? Sending good energy! 💖💅";
-            } else {
-                greetingText = "Hello there. I'm Mind Ease, your AI mental health companion. I'm here to listen and support you in a safe, non-judgmental space. How are you feeling today?";
-            }
-
-            // Small delay for natural feel
-            setTimeout(async () => {
-                const { error } = await supabase.from('messages').insert([{
-                    user_id: user.id,
+        if (parsedMessages.length === 0) {
+            setTimeout(() => {
+                const newMsg = {
+                    id: Date.now(),
                     text: greetingText,
-                    sender: 'bot'
-                }]);
-                if (!error) speak(greetingText);
+                    sender: 'bot',
+                    created_at: new Date().toISOString()
+                };
+                setMessages([newMsg]);
+                speak(greetingText);
             }, 600);
-        };
+        } else {
+            // If there's history, just speak a welcome word out loud without appending a message
+            setTimeout(() => {
+                speak(speechText);
+            }, 600);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [storageKey]);
 
-        sendGreeting();
-    }, [user?.id, messages.length, chatMode, character]);
+    // Save messages to localStorage whenever they change
+    useEffect(() => {
+        if (messages.length > 0) {
+            localStorage.setItem(storageKey, JSON.stringify(messages));
+        }
+    }, [messages, storageKey]);
 
     useEffect(() => {
         scrollToBottom();
     }, [messages, isTyping]);
-
-    // Text-to-speech helper
-    const speak = (text) => {
-        if (!isTtsEnabled || !window.speechSynthesis) return;
-        window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.rate = 0.95;
-        window.speechSynthesis.speak(utter);
-    };
 
     const startListening = () => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -202,44 +205,47 @@ function ChatArea({ mood, chatMode, character, onCharacterChange }) {
 
     const handleSend = async (e) => {
         e.preventDefault();
-        if (!input.trim() || !user) return;
+        if (!input.trim()) return;
 
         const userText = input.trim();
         setInput('');
+
+        const userMsg = {
+            id: Date.now(),
+            text: userText,
+            sender: 'user',
+            created_at: new Date().toISOString()
+        };
+
+        setMessages(prev => [...prev, userMsg]);
         setIsTyping(true);
 
         try {
-            // Send user message to Supabase
-            await supabase.from('messages').insert([{
-                user_id: user.id,
-                text: userText,
-                sender: 'user'
-            }]);
-
             const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
             const systemInstruction = buildSystemInstruction();
 
-            // Format history for Gemini
-            // Note: Gemini expects 'user' and 'model' roles
-            const geminiHistory = messages.map(msg => ({
-                role: msg.sender === 'user' ? 'user' : 'model',
-                parts: [{ text: msg.text }]
-            }));
+            // Format history for OpenRouter
+            const openRouterHistory = [
+                { role: 'user', content: systemInstruction },
+                ...messages.map(msg => ({
+                    role: msg.sender === 'user' ? 'user' : 'assistant',
+                    content: msg.text
+                }))
+            ];
 
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
+            const response = await fetch(`https://openrouter.ai/api/v1/chat/completions`, {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${geminiApiKey}`
                 },
                 body: JSON.stringify({
-                    contents: [
-                        ...geminiHistory,
-                        { role: "user", parts: [{ text: `${systemInstruction}\n\nUser Message: ${userText}` }] }
+                    model: "qwen/qwen3-vl-30b-a3b-thinking",
+                    messages: [
+                        ...openRouterHistory,
+                        { role: "user", content: userText }
                     ],
-                    generationConfig: {
-                        temperature: 0.8,
-                        maxOutputTokens: 500
-                    }
+                    temperature: 0.8
                 })
             });
 
@@ -247,29 +253,32 @@ function ChatArea({ mood, chatMode, character, onCharacterChange }) {
 
             if (!response.ok) {
                 const errorData = await response.json();
-                console.error("Gemini API Error:", errorData);
-                throw new Error(errorData.error?.message || `Gemini API failed with status ${response.status}`);
+                console.error("OpenRouter API Error:", errorData);
+                throw new Error(errorData.error?.message || `API failed with status ${response.status}`);
             } else {
                 const data = await response.json();
-                botText = data.candidates?.[0]?.content?.parts?.[0]?.text || "I'm having trouble thinking right now.";
+                botText = data.choices?.[0]?.message?.content || "I'm having trouble thinking right now.";
             }
 
-            // Send bot response to Supabase
-            await supabase.from('messages').insert([{
-                user_id: user.id,
+            const botMsg = {
+                id: Date.now() + 1,
                 text: botText,
-                sender: 'bot'
-            }]);
+                sender: 'bot',
+                created_at: new Date().toISOString()
+            };
 
+            setMessages(prev => [...prev, botMsg]);
             speak(botText);
 
         } catch (error) {
             console.error("Error:", error);
-            await supabase.from('messages').insert([{
-                user_id: user.id,
+            const errorMsg = {
+                id: Date.now() + 1,
                 text: `[System]: I encountered an error: ${error.message}`,
-                sender: 'bot'
-            }]);
+                sender: 'bot',
+                created_at: new Date().toISOString()
+            };
+            setMessages(prev => [...prev, errorMsg]);
         } finally {
             setIsTyping(false);
         }
@@ -291,7 +300,7 @@ function ChatArea({ mood, chatMode, character, onCharacterChange }) {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
                                     <span>🔒 Your session is secure and private.</span>
                                     <span style={{ opacity: 0.6, fontSize: '0.85em', borderLeft: '1px solid currentColor', paddingLeft: '8px' }}>
-                                        Logged in as <strong>{user?.email}</strong>
+                                        Frontend-Only Demo Mode
                                     </span>
                                 </div>
                             )}

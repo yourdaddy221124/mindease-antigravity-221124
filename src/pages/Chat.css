@@ -56,6 +56,8 @@
     gap: 1rem;
     flex-shrink: 0;
     animation: fadeIn 0.5s var(--ease-smooth) both;
+    position: relative;
+    z-index: 100;
 }
 
 .chat-title {

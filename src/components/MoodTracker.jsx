@@ -8,6 +8,8 @@ const MOODS = [
     { label: 'Neutral', emoji: '😐', color: '#94a3b8' },
     { label: 'Anxious', emoji: '😰', color: '#fb923c' },
     { label: 'Low', emoji: '😔', color: '#f43f5e' },
+    { label: 'Sad', emoji: '😢', color: '#3b82f6' },
+    { label: 'Angry', emoji: '😡', color: '#ef4444' },
 ];
 
 function MoodTracker({ currentMood, setMood }) {
